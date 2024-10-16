@@ -4,7 +4,7 @@ from analyzer import find_sql_injections
 from fixers import fix_sql_injections
 
 def main():
-    target_path = '.'  # Текущая директория
+    target_path = './test_code'  
 
     # Шаг 1: Анализ кода на наличие SQL-инъекций
     vulnerabilities = find_sql_injections(target_path)
