@@ -38,8 +38,7 @@ class SQLInjectionVisitor(ast.NodeVisitor):
                     })
         self.generic_visit(node)
 
-    def is_vulnerable(self, node):
-        # Проверяем, есть ли конкатенация в аргументах execute()
+    def is_vulnerable(self, node):        # Проверяем, есть ли конкатенация в аргументах execute()
         if node.args:
             arg = node.args[0]
             if isinstance(arg, ast.BinOp):
