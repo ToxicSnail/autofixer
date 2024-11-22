@@ -30,7 +30,7 @@ class SQLInjectionFixer(ast.NodeTransformer):
                 return self.fix_node(node)
         return self.generic_visit(node)
 
-    def fix_node(self, node):    # Заменяем конкатенацию на параметризованный запрос
+    def fix_node(self, node):
         query_arg = node.args[0]
         if isinstance(query_arg, ast.BinOp):
             params = self.extract_params(query_arg)
@@ -39,7 +39,7 @@ class SQLInjectionFixer(ast.NodeTransformer):
             node.args = new_args
         return node
 
-    def extract_params(self, node):    # Рекурсивно извлекаем параметры из узла конкатенации
+    def extract_params(self, node):
         params = []
         if isinstance(node, ast.BinOp):
             params.extend(self.extract_params(node.left))
@@ -47,5 +47,7 @@ class SQLInjectionFixer(ast.NodeTransformer):
         elif isinstance(node, ast.Name):
             params.append(node)
         elif isinstance(node, ast.Call):
+            params.append(node)
+        elif isinstance(node, ast.Constant):
             params.append(node)
         return params
