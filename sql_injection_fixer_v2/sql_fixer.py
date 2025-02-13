@@ -5,106 +5,184 @@ import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
 
 class SQLInjectionVisitor(ast.NodeVisitor):
+    
+    """
+    Анализируем AST, собираем данные об опасных местах:
+    1) Присвоение вида: query_var = "SELECT ..." + str(param)
+    2) Вызов cursor.execute(query_var)
+    """
+    
     def __init__(self, filename):
         self.filename = filename
-        self.vulnerabilities = []      # список уязвимостей
-        self.unsafe_vars = {}          # { var_name: (True, param_name) }
+
+        """
+         Каждая уязвимость — словарь, содержащий:
+         {
+           'file': str,
+           'lineno_assign': int,
+           'var_name': str,
+           'param_name': str,
+           'lineno_execute': int or None
+         }
+         """
+        
+        self.vulnerabilities = []
 
     def visit_Assign(self, node):
-        # Проверяем, что это присвоение вида "var_name = <что-то>"
+        
+        """
+        Ищем что-то вроде:
+            query = "SELECT ... " + str(param)
+        """
+        
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             var_name = node.targets[0].id
-            # Если это конкатенация c BinOp
-            if isinstance(node.value, ast.BinOp) and isinstance(node.value.op, ast.Add):
-                # И проверяем, не похоже ли правое слагаемое на str(...)?
-                param_name = self.extract_param_from_str(node.value)
-                if param_name:
-                    # Помечаем переменную var_name как небезопасную + храним имя параметра
-                    self.unsafe_vars[var_name] = (True, param_name)
+            if (isinstance(node.value, ast.BinOp) and
+                isinstance(node.value.op, ast.Add)):
+                
+                param_name = self._extract_param_name(node.value)
+                if param_name:    
+                    # Сохраняем уязвимость
+                    self.vulnerabilities.append({
+                        'file': self.filename,
+                        'lineno_assign': node.lineno,
+                        'var_name': var_name,
+                        'param_name': param_name,
+                        'lineno_execute': None
+                    })
         self.generic_visit(node)
 
-    def extract_param_from_str(self, binop_node):
+    def _extract_param_name(self, binop_node):
+        
         """
-        Если binop_node выглядит как: "SOMETHING + str(<param>)",
-        вернём имя <param>. Иначе None
+        Если binop_node = <string> + str(...),
+        пытаемся вытащить имя переменной, которую оборачивают в str(...).
+        Возвращаем имя параметра или None.
         """
-        # binop_node.left, binop_node.right
-        # Ищем в любом из слагаемых вызов str(х)
+        
         for side in (binop_node.left, binop_node.right):
             if isinstance(side, ast.Call):
-                if isinstance(side.func, ast.Name) and side.func.id == 'str':
-                    if side.args and isinstance(side.args[0], ast.Name):
-                        return side.args[0].id
+                # проверяем, что это str(...)
+                if (isinstance(side.func, ast.Name) and side.func.id == 'str'
+                    and side.args and isinstance(side.args[0], ast.Name)):
+                    return side.args[0].id
         return None
 
     def visit_Call(self, node):
-        # Ищем cursor.execute(...)
+        
+        """
+        Ищем cursor.execute(...).
+        Если первым аргументом execute() идёт var_name,
+        которая найдена выше как небезопасная, то записываем lineno_execute.
+        """
+        
         if (isinstance(node.func, ast.Attribute) and 
-            node.func.attr == 'execute'):
-            if node.args:
-                first_arg = node.args[0]
-                # Если первый аргумент - имя переменной (например string)
-                if isinstance(first_arg, ast.Name):
-                    var_name = first_arg.id
-                    if var_name in self.unsafe_vars:
-                        unsafe_info = self.unsafe_vars[var_name]  # (True, param_name)
-                        if unsafe_info[0] is True:
-                            param_name = unsafe_info[1]
-                            self.vulnerabilities.append({
-                                'file': self.filename,
-                                'lineno': node.lineno,
-                                'desc': f'Вызов execute() с небезопасной переменной "{var_name}"',
-                                'query_var': var_name,     # сохраняем имя переменной с запросом
-                                'param_var': param_name    # сохраняем имя вклеиваемого параметра
-                            })
+            node.func.attr == 'execute' and
+            node.args):
+            
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.Name):
+                call_var = first_arg.id
+                # Ищем в self.vulnerabilities
+                for vuln in self.vulnerabilities:
+                    # если совпадают var_name и ещё не назначен lineno_execute
+                    if (vuln['var_name'] == call_var and
+                        vuln['lineno_execute'] is None):
+                        vuln['lineno_execute'] = node.lineno
+
         self.generic_visit(node)
 
 
-
 class SQLInjectionFixer(cst.CSTTransformer):
+    
+    """
+    Шаг 2: Исправляем найденные уязвимости.
+    Заменяем: 
+    query = "SELECT ... " + str(param) -> query = "SELECT ... %s"
+    и
+    cursor.execute(query) -> cursor.execute(query, (param,))
+    """
     METADATA_DEPENDENCIES = (PositionProvider,)
 
     def __init__(self, vulnerabilities):
-        self.vulnerabilities = vulnerabilities
+        # Сохраним уязвимости по номеру строки, чтобы легко искать.
+        self.vulns_by_line = {}
+        for vuln in vulnerabilities:
+            lineno_assign = vuln['lineno_assign']
+            lineno_execute = vuln['lineno_execute']
+            self.vulns_by_line[lineno_assign] = vuln
+            # Вызов execute может быть на следующей строке (или позже)
+            if lineno_execute:
+                self.vulns_by_line[lineno_execute] = vuln
+
+    def leave_Assign(self, original_node, updated_node):
+        
+        """
+        Если это присвоение, обозначенное как уязвимость (lineno_assign),
+        переписываем "query = "... " + str(param)" на "query = "SELECT ... %s""
+        (упрощённый вариант: жёстко подставляем %s вместо параметра).
+        """
+        
+        position = self.get_metadata(PositionProvider, original_node)
+        if not position:
+            return updated_node
+
+        line_number = position.start.line
+        vuln = self.vulns_by_line.get(line_number)
+        if vuln:
+            var_name = vuln['var_name']
+            if (len(original_node.targets) == 1 and
+                isinstance(original_node.targets[0].target, cst.Name) and
+                original_node.targets[0].target.value == var_name):
+
+                """
+                Меняем значение RHS
+                Для простоты: всегда ставим ... %s
+                При желании можно извлечь левую часть строки из BinOp.
+                """
+                    
+                new_value = cst.SimpleString('"SELECT * FROM users WHERE nickname = %s"')
+                return updated_node.with_changes(value=new_value)
+        return updated_node
 
     def leave_Call(self, original_node, updated_node):
-        if (isinstance(original_node.func, cst.Attribute) and
-            original_node.func.attr.value == 'execute'):
-            
-            position = self.get_metadata(PositionProvider, original_node)
-            if not position:
-                return updated_node
+        
+        """
+        Если это вызов cursor.execute(...) на строке lineno_execute,
+        переписываем:
+            cursor.execute(query)
+        в:
+            cursor.execute(query, (param,))
+        """
+        
+        position = self.get_metadata(PositionProvider, original_node)
+        if not position:
+            return updated_node
 
-            line_number = position.start.line
-
-            for vuln in self.vulnerabilities:
-                if vuln['lineno'] == line_number:
-                    # Получаем имена, сохранённые в Visitor
-                    query_var = vuln.get('query_var', 'query')
-                    param_var = vuln.get('param_var', 'user_id')
-
-                    # "string" идёт первым аргументом,
-                    safe_sql = cst.Name(query_var)
-                    # "(nickname,)" идёт вторым аргументом
-                    safe_param = cst.Tuple(elements=[
-                        cst.Element(value=cst.Name(param_var))
-                    ])
-
-                    return updated_node.with_changes(
-                        args=[
-                            cst.Arg(value=safe_sql),
-                            cst.Arg(value=safe_param)
-                        ]
-                    )
+        line_number = position.start.line
+        vuln = self.vulns_by_line.get(line_number)
+        if vuln:
+            if (isinstance(original_node.func, cst.Attribute) and
+                original_node.func.attr.value == 'execute'):
+                query_var = vuln['var_name']
+                param_var = vuln['param_name']
+                # Создаём нужные аргументы
+                query_arg = cst.Arg(value=cst.Name(query_var))
+                param_arg = cst.Arg(
+                    value=cst.Tuple([cst.Element(cst.Name(param_var))])
+                )
+                return updated_node.with_changes(args=[query_arg, param_arg])
 
         return updated_node
 
 
-
 def analyze_sql_injections(path):
+    
     """
-    Рекурсивно проходимся по файлам, собираем все уязвимости.
+    Рекурсивно обходим каталоги, ищем .py-файлы,
+    запускаем SQLInjectionVisitor для сбора уязвимостей.
     """
+    
     vulnerabilities = []
     for root, _, files in os.walk(path):
         for filename in files:
@@ -116,49 +194,64 @@ def analyze_sql_injections(path):
                     tree = ast.parse(code, filename=fullpath)
                     visitor = SQLInjectionVisitor(fullpath)
                     visitor.visit(tree)
+                    # Собираем найденные уязвимости
                     vulnerabilities.extend(visitor.vulnerabilities)
                 except SyntaxError as e:
-                    print(f"Ошибка синтаксиса в файле {fullpath}: {e}")
+                    print(f"[SYNTAX ERROR] {fullpath}: {e}")
     return vulnerabilities
 
+
 def fix_sql_injections(vulnerabilities):
+    
     """
-    Сгруппируем уязвимости по файлам, и для каждого файла выполним трансформацию libCST.
+    Для каждого файла, у которого есть уязвимости,
+    делаем трансформацию с помощью LibCST.
+    Результат пишем в "secure_<filename>".
     """
+    
     from collections import defaultdict
     vulns_by_file = defaultdict(list)
     for v in vulnerabilities:
         vulns_by_file[v['file']].append(v)
 
     for file, vulns in vulns_by_file.items():
-        with open(file, 'r', encoding='utf-8') as f:
-            source_code = f.read()
-        cst_tree = cst.parse_module(source_code)
-        
-        wrapper = MetadataWrapper(cst_tree)
-        fixer = SQLInjectionFixer(vulns)
-        new_tree = wrapper.visit(fixer)
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                source_code = f.read()
+            cst_tree = cst.parse_module(source_code)
+            
+            wrapper = MetadataWrapper(cst_tree)
+            fixer = SQLInjectionFixer(vulns)
+            new_tree = wrapper.visit(fixer)
 
-        new_filename = f"secure_{os.path.basename(file)}"
-        with open(new_filename, 'w', encoding='utf-8') as f_out:
-            f_out.write(new_tree.code)
-        print(f"[FIX] Создан исправленный файл: {new_filename}")
+            new_filename = f"secure_{os.path.basename(file)}"
+            secure_path = os.path.join(os.path.dirname(file), new_filename)
+            with open(secure_path, 'w', encoding='utf-8') as f_out:
+                f_out.write(new_tree.code)
+            print(f"[FIXED] Создан исправленный файл: {secure_path}")
+        except Exception as e:
+            print(f"[ERROR] Не удалось обработать {file}: {e}")
+
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description='Автофикс SQL-инъекций (упрощённый пример).')
     parser.add_argument('path', help='Путь к каталогу с Python-файлами')
     parser.add_argument('--fix', action='store_true', help='Автоматически исправлять уязвимости')
     args = parser.parse_args()
 
     vulnerabilities = analyze_sql_injections(args.path)
     if vulnerabilities:
-        print("\nНайдены уязвимости:")
+        print("[!] Найдены уязвимости:")
         for v in vulnerabilities:
-            print(f" - {v['file']} (строка {v['lineno']}): {v['desc']}")
+            print(f" - {v['file']} (строка {v['lineno_assign']}): опасная конкатенация для переменной '{v['var_name']}' -> {v['param_name']}")
+            if v['lineno_execute']:
+                print(f"      Вызов cursor.execute(...) на строке {v['lineno_execute']}")
+
         if args.fix:
             fix_sql_injections(vulnerabilities)
     else:
-        print("✅ Уязвимостей не найдено.")
+        print("Уязвимостей не обнаружено.")
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
