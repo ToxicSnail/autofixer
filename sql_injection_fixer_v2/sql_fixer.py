@@ -19,7 +19,9 @@ class SQLInjectionVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node):
+        print(f"Visiting function call: {ast.dump(node, indent=4)}")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'execute':
+            print(f"Found execute() call at line {node.lineno}")
             if self.is_vulnerable(node):
                 self.vulnerabilities.append({
                     'file': self.filename,
@@ -32,13 +34,19 @@ class SQLInjectionVisitor(ast.NodeVisitor):
     def is_vulnerable(self, node):
         if node.args:
             arg = node.args[0]
+            print(f"\n Analyzing argument in line {node.lineno}: {ast.dump(arg, indent=4)}")
+            
             if isinstance(arg, ast.Name) and arg.id in self.assignments:
+                print(f" Found variable {arg.id} being passed to execute() at line {node.lineno}")
                 return True
             elif isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
+                print(f" Found string concatenation in execute() at line {node.lineno}")
                 return True
             elif isinstance(arg, ast.JoinedStr):  # Проверка f-строк
+                print(f" Found f-string in execute() at line {node.lineno}")
                 return True
             elif isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and arg.func.attr == 'format':
+                print(f" Found .format() usage in execute() at line {node.lineno}")
                 return True
         return False
 
@@ -60,10 +68,15 @@ class SQLInjectionFixer(cst.CSTTransformer):
 def analyze_sql_injections(path):
     vulnerabilities = []
     for root, _, files in os.walk(path):
+        print(f" Scanning directory: {path}")
         for file in files:
+            print(f" Found Python file: {file}")
             if file.endswith('.py'):
+                print(f" Processing: {file}")
                 filename = os.path.join(root, file)
-                with open(filename, 'r') as f:
+                print(f"Analyzing file: {filename}")
+                print(f" Reading file: {filename}")
+        with open(filename, 'r') as f:
                     source_code = f.read()
                     tree = ast.parse(source_code, filename=filename)
                     visitor = SQLInjectionVisitor(filename)
@@ -73,8 +86,10 @@ def analyze_sql_injections(path):
 
 
 def fix_sql_injections(vulnerabilities):
+    print(" Detected vulnerabilities:")
     for vuln in vulnerabilities:
         filename = vuln['file']
+        print(f" Reading file: {filename}")
         with open(filename, 'r') as f:
             source_code = f.read()
             tree = cst.parse_module(source_code)
@@ -83,28 +98,28 @@ def fix_sql_injections(vulnerabilities):
             new_filename = f"secure_{os.path.basename(filename)}"
             with open(new_filename, 'w') as f_out:
                 f_out.write(modified_tree.code)
-            print(f"Исправленный файл создан: {new_filename}")
+            print(f" Fixed file created: {new_filename}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('path', help='Директория с кодом')
-    parser.add_argument('--fix', action='store_true', help='Исправить найденные уязвимости')
-    parser.add_argument('--json', action='store_true', help='Вывести отчет в JSON')
+    parser.add_argument('path', help='Directory containing Python files')
+    parser.add_argument('--fix', action='store_true', help='Fix found vulnerabilities')
+    parser.add_argument('--json', action='store_true', help='Output report in JSON format')
     args = parser.parse_args()
 
     vulnerabilities = analyze_sql_injections(args.path)
 
     if vulnerabilities:
-        print("Найдены уязвимости:")
+        print("\n⚠️ Found vulnerabilities:")
         for vuln in vulnerabilities:
-            print(f"Файл: {vuln['file']}, Строка: {vuln['lineno']}")
+            print(f"File: {vuln['file']}, Line: {vuln['lineno']}")
         if args.json:
             print(json.dumps(vulnerabilities, indent=4))
         if args.fix:
             fix_sql_injections(vulnerabilities)
     else:
-        print("Уязвимостей не найдено.")
+        print(" No vulnerabilities found.")
 
 if __name__ == "__main__":
     main()
