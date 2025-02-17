@@ -20,6 +20,7 @@ class SQLInjectionVisitor(ast.NodeVisitor):
         #   'param_name': str,
         #   'lineno_execute': int or None,
         #   'query_part': str  # Динамическая часть запроса (например, поля или таблицы)
+        #   'is_simple': bool  # Определяет, простая ли это конкатенация
         # }
         self.vulnerabilities = []
 
@@ -34,7 +35,11 @@ class SQLInjectionVisitor(ast.NodeVisitor):
                 
                 param_name = self._extract_param_name(node.value)
                 query_part = self._extract_query_part(node.value)
+                
+                # Если нашли переменную (параметр) или часть строки
                 if param_name or query_part:
+                    is_simple = self._is_simple_concatenation(node.value)
+                    
                     # Сохраняем уязвимость
                     self.vulnerabilities.append({
                         'file': self.filename,
@@ -42,8 +47,10 @@ class SQLInjectionVisitor(ast.NodeVisitor):
                         'var_name': var_name,
                         'param_name': param_name,
                         'lineno_execute': None,
-                        'query_part': query_part  # Сохраняем изменяемую часть запроса
+                        'query_part': query_part,
+                        'is_simple': is_simple  # Определяем, простая ли это конкатенация
                     })
+                    print(f"[DEBUG] Found vulnerability at line {node.lineno} in {self.filename}: query = {var_name} + {param_name} (simple: {is_simple})")
         self.generic_visit(node)
 
     def _extract_param_name(self, binop_node):
@@ -70,6 +77,13 @@ class SQLInjectionVisitor(ast.NodeVisitor):
                 return side.s
         return None
 
+    def _is_simple_concatenation(self, binop_node):
+        """
+        Определяем, является ли конкатенация "простой" (т.е. только одна переменная).
+        """
+        # Если обе части BinOp - строки, то это "простая" конкатенация
+        return isinstance(binop_node.left, ast.Str) and isinstance(binop_node.right, ast.Call)
+
     def visit_Call(self, node):
         """
         Ищем cursor.execute(...).
@@ -89,6 +103,7 @@ class SQLInjectionVisitor(ast.NodeVisitor):
                     if (vuln['var_name'] == call_var and
                         vuln['lineno_execute'] is None):
                         vuln['lineno_execute'] = node.lineno
+                        print(f"[DEBUG] Found cursor.execute() call at line {node.lineno} for {call_var}")
 
         self.generic_visit(node)
 
@@ -139,11 +154,14 @@ class SQLInjectionFixer(cst.CSTTransformer):
                 
                 # Если была динамическая часть запроса (например, столбцы), заменим на %s
                 query_part = vuln.get('query_part')
-                if query_part:
+                if vuln['is_simple']:
+                    # Простая конкатенация, только заменяем на %s для параметра
                     new_value = cst.SimpleString(f'"SELECT * FROM {query_part} WHERE nickname = %s"')
                 else:
-                    new_value = cst.SimpleString('"SELECT * FROM users WHERE nickname = %s"')
+                    # Для сложной конкатенации, заменяем только параметры
+                    new_value = cst.SimpleString(f'"SELECT * FROM {query_part} WHERE name = %s AND age = %s"')
 
+                print(f"[DEBUG] Replaced query: {new_value}")
                 return updated_node.with_changes(value=new_value)
         return updated_node
 
@@ -171,6 +189,7 @@ class SQLInjectionFixer(cst.CSTTransformer):
                 param_arg = cst.Arg(
                     value=cst.Tuple([cst.Element(cst.Name(param_var))])
                 )
+                print(f"[DEBUG] Replaced execute: {query_var}, ({param_var})")
                 return updated_node.with_changes(args=[query_arg, param_arg])
 
         return updated_node
