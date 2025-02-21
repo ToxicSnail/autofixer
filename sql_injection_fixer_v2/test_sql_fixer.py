@@ -6,22 +6,18 @@ from libcst.metadata import MetadataWrapper, PositionProvider
 
 
 class SQLInjectionVisitor(ast.NodeVisitor):
-   
     """
     Ищем небезопасную конкатенацию строк для SQL-запросов.
     Пример: query = "SELECT ... " + str(param)
     """
-    
     def __init__(self, filename):
         self.filename = filename
         self.vulnerabilities = []
 
     def visit_Assign(self, node):
-       
         """
         Ищем присвоение вида: query = "SELECT ... " + str(param)
         """
-        
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             var_name = node.targets[0].id
             if isinstance(node.value, ast.BinOp) and isinstance(node.value.op, ast.Add):
@@ -46,11 +42,9 @@ class SQLInjectionVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _extract_param_name(self, binop_node):
-        
         """
         Если binop_node = <string> + str(...), пытаемся вытащить имя переменной.
         """
-       
         for side in (binop_node.left, binop_node.right):
             if isinstance(side, ast.Call):
                 if isinstance(side.func, ast.Name) and side.func.id == 'str' and \
@@ -59,30 +53,24 @@ class SQLInjectionVisitor(ast.NodeVisitor):
         return None
 
     def _extract_query_part(self, binop_node):
-        
         """
         Ищем статичную часть запроса.
         """
-        
         for side in (binop_node.left, binop_node.right):
             if isinstance(side, ast.Constant) and isinstance(side.value, str):
                 return side.value
         return None
 
     def _is_simple_concatenation(self, binop_node):
-        
         """
         Проверяем, является ли конкатенация "простой" (одна переменная).
         """
-        
         return isinstance(binop_node.left, ast.Constant) and isinstance(binop_node.right, ast.Call)
 
     def visit_Call(self, node):
-        
         """
         Ищем cursor.execute(...).
         """
-        
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'execute' and node.args:
             first_arg = node.args[0]
             if isinstance(first_arg, ast.Name):
@@ -96,11 +84,9 @@ class SQLInjectionVisitor(ast.NodeVisitor):
 
 
 class SQLInjectionFixer(cst.CSTTransformer):
-    
     """
     Исправляем найденные уязвимости.
     """
-   
     METADATA_DEPENDENCIES = (PositionProvider,)
 
     def __init__(self, vulnerabilities):
@@ -113,11 +99,9 @@ class SQLInjectionFixer(cst.CSTTransformer):
                 self.vulns_by_line[lineno_execute] = vuln
 
     def leave_Assign(self, original_node, updated_node):
-        
         """
         Исправляем присвоение SQL-запроса, оставляя оригинальную структуру.
         """
-    
         position = self.get_metadata(PositionProvider, original_node)
         if not position:
             return updated_node
@@ -144,11 +128,9 @@ class SQLInjectionFixer(cst.CSTTransformer):
         return updated_node
 
     def leave_Call(self, original_node, updated_node):
-        
         """
         Исправляем вызов cursor.execute().
         """
-        
         position = self.get_metadata(PositionProvider, original_node)
         if not position:
             return updated_node
@@ -168,12 +150,10 @@ class SQLInjectionFixer(cst.CSTTransformer):
 
 
 def analyze_sql_injections(path):
-    
     """
     Рекурсивно обходим каталоги, ищем .py-файлы,
     запускаем SQLInjectionVisitor для сбора уязвимостей.
     """
-    
     vulnerabilities = []
     for root, _, files in os.walk(path):
         for filename in files:
@@ -193,13 +173,11 @@ def analyze_sql_injections(path):
 
 
 def fix_sql_injections(vulnerabilities):
-    
     """
     Для каждого файла, у которого есть уязвимости,
     делаем трансформацию с помощью LibCST.
     Результат пишем в "secure_<filename>".
     """
-    
     from collections import defaultdict
     vulns_by_file = defaultdict(list)
     for v in vulnerabilities:
