@@ -1,8 +1,8 @@
 # AutoFixer
 
-Инструмент для автоматического обнаружения и исправления популярных уязвимостей python, таких как SQL-инъекций, eval() в Python-коде.
+A tool for automatically detecting and fixing popular python vulnerabilities such as SQL injection, eval() in Python code.
 
-## Установка
+## Installing
 
 ```bash
 pip install -r requirements.txt
