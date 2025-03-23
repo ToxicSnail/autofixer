@@ -1,4 +1,0 @@
-[console_scripts]
-eval-fix = eval_fixer.eval_fixer:main
-sql-fix = sql_injection_fixer_v2.sql_fixer:main
-test-sql = sql_injection_fixer_v2.test_sql_fixer:main

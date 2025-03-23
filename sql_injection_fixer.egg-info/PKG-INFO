@@ -1,5 +1,0 @@
-Metadata-Version: 2.2
-Name: sql_injection_fixer
-Version: 0.1
-Requires-Dist: libcst
-Dynamic: requires-dist
