@@ -8,8 +8,6 @@ def vulnerable_query(user_id):
     pole_1 = "SELECT * FROM users WHERE nickname = " + str(string)
     cursor.execute(pole_1)
 
-    #Данный пример очень упрощён (работает только на шаблоне "..." + str(param))
-
     # Еще один уязвимый вариант (f-строка)
     query_f = f"SELECT * FROM users WHERE id = {user_id}"
     cursor.execute(query_f)
