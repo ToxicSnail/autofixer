@@ -1,7 +1,7 @@
 # AutoFixer
 
 **AutoFixer** – это инструмент для автоматического обнаружения и исправления некоторых распространённых уязвимостей в Python-коде:
-- Использование `eval()`
+- Небезопасные вызовы `eval()`
 - SQL-инъекции
 
 ## Возможности
@@ -21,16 +21,38 @@ source .venv/bin/activate
 ```
 ### Шаг 2. Установите зависимости
 ```bash
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 ### Шаг 3. Установите пакет
-```
+```bash
 pip install .
 ```
     При установке будет создан(ы) CLI-скрипт(ы) (например, sql-fix, eval-fix) в виртуальном окружении.
 
-## Использование
-После установки в активированном окружении будут доступны команды:
+## Запуск
+### Вариант 1. Запуск через `main.py`
+В корне проекта лежит скрипт main.py, который умеет работать как с аргументами, так и в интерактивном режиме.
+- **Интерактивный режим** (просто запустить без аргументов):
+    ```bash
+    python main.py
+    ```
+- **Режим командной строки**:
+    ```bash
+    python main.py [sql|eval|all] <your_path_to_test> [--fix]
+    ```
+
+### Вариант 2. Использование консольных команд(entry поинты)
+Если вы установили пакет командой `pip install .`, и в вашем `setup.py` прописаны `entry_points` вида:
+```python
+entry_points={
+    'console_scripts': [
+        'sql-fix=sql_injection_fixer_v2.sql_fixer:main',
+        'eval-fix=eval_fixer.eval_fixer:main'
+    ],
+},
+```
+После такой установки в активированном окружении будут доступны команды:
 - SQL-инъекции:
     - Показать справку(инструкции)
         ```bash
@@ -58,18 +80,33 @@ pip install .
         eval-fix /path/to/your/code --fix
         ```
 ## Структура проекта
-```bash
+```text
 autofixer/
-├─ eval_fixer/
-│  ├─ __init__.py
-│  └─ eval_fixer.py
-├─ sql_injection_fixer_v2/
-│  ├─ __init__.py
-│  └─ sql_fixer.py
-├─ test_code/
-│  ├─ example.py
-│  └─ vulnerable_code.py
-├─ setup.py
-├─ requirements.txt
-└─ README.md
+  ├── .venv/
+  ├── eval_fixer/
+  │    ├── __init__.py
+  │    └── eval_fixer.py
+  ├── sql_injection_fixer_v2/
+  │    ├── __init__.py
+  │    └── sql_fixer.py
+  ├── test_code/
+  │    ├── example.py
+  │    └── vulnerable_code.py
+  ├── requirements.txt
+  ├── setup.py
+  ├── main.py
+  └── README.md
 ```
+
+## Примечания
+- Файлы `build/`, `dist/`, `*.egg-info` и виртуальные окружения (`.venv/`) обычно не коммитят в репозиторий. Можете добавить их в .gitignore.
+
+## Лицензия
+Проект разработан в рамках курсовой работы Горького Кирилла в 2024-2025 г.
+
+---
+**AutoFixer** — это экспериментальный инструмент. 
+
+Он может не учесть все возможные варианты уязвимостей. Рекомендуется вручную проверять исправленный код перед деплоем в production. Также не рекомендуется использовать продукт в корпоративной или комерческой разработке. 
+
+Если у вас есть предложения по улучшению или вы нашли баг, создавайте issue или Pull Request!
