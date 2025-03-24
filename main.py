@@ -6,7 +6,8 @@ BLUE = "\033[94m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
-from sql_injection_fixer_v2.sql_fixer import analyze_sql_injections, fix_sql_injections
+# from sql_injection_fixer_v2.sql_fixer import analyze_sql_injections, fix_sql_injections
+from sql_injection_fixer_v2.test_sql_fixer import analyze_sql_injections, fix_sql_injections
 from eval_fixer.eval_fixer import analyze_eval_calls, fix_eval_calls
 
 def print_banner():
@@ -37,7 +38,6 @@ def run_sql_injection_fixer(path, fix):
     else:
         print("Уязвимостей SQL-инъекций не обнаружено.")
 
-
 def run_eval_fixer(path, fix):
     eval_calls = analyze_eval_calls(path)
     if eval_calls:
@@ -49,41 +49,71 @@ def run_eval_fixer(path, fix):
     else:
         print("Вызовов eval() не обнаружено.")
 
-
 def main():
     print_banner()
 
-    parser = argparse.ArgumentParser(
-        description="Запуск автофикса SQL-инъекций и eval-вызовов."
-    )
-    parser.add_argument(
-        "tool",
-        choices=["sql", "eval", "all"],
-        help="Какой инструмент запустить: sql, eval или all (оба).",
-    )
-    parser.add_argument(
-        "path",
-        help="Путь к каталогу или файлу, который нужно просканировать."
-    )
-    parser.add_argument(
-        "--fix",
-        action="store_true",
-        help="Автоматически исправлять уязвимости, если они найдены."
-    )
-    args = parser.parse_args()
+    if len(sys.argv) == 1:
+        print("Вы не передали аргументы. Переходим в интерактивный режим.\n")
 
-    if args.tool == "sql":
-        run_sql_injection_fixer(args.path, args.fix)
+        while True:
+            tool = input("Выберите инструмент (sql, eval, all): ").strip().lower()
+            if tool in ["sql", "eval", "all"]:
+                break
+            else:
+                print("Неверный выбор инструмента. Повторите ввод.\n")
 
-    elif args.tool == "eval":
-        run_eval_fixer(args.path, args.fix)
+        while True:
+            path = input("Введите путь к каталогу или файлу: ").strip()
+            if path:
+                if not os.path.exists(path):
+                    print(f"Указанный путь '{path}' не существует. Повторите ввод.\n")
+                else:
+                    break
+            else:
+                print("Путь не может быть пустым. Повторите ввод.\n")
 
-    elif args.tool == "all":
+        while True:
+            fix_answer = input("Использовать автоматическое исправление (y/n)? ").strip().lower()
+            if fix_answer in ["y", "yes", "n", "no"]:
+                fix = fix_answer in ("y", "yes")
+                break
+            else:
+                print("Неверный ввод. Введите 'y' или 'n'.\n")
+
+    else:
+        parser = argparse.ArgumentParser(
+            description="Запуск автофикса SQL-инъекций и eval-вызовов."
+        )
+        parser.add_argument(
+            "tool",
+            choices=["sql", "eval", "all"],
+            help="Какой инструмент запустить: sql, eval или all (оба).",
+        )
+        parser.add_argument(
+            "path",
+            help="Путь к каталогу или файлу, который нужно просканировать."
+        )
+        parser.add_argument(
+            "--fix",
+            action="store_true",
+            help="Автоматически исправлять уязвимости, если они найдены."
+        )
+        args = parser.parse_args()
+
+        tool = args.tool
+        path = args.path
+        fix = args.fix
+
+    if tool == "sql":
+        run_sql_injection_fixer(path, fix)
+    elif tool == "eval":
+        run_eval_fixer(path, fix)
+    elif tool == "all":
         print(f"{GREEN}--= Запуск SQL Injection Fixer =--{RESET}")
-        run_sql_injection_fixer(args.path, args.fix)
+        run_sql_injection_fixer(path, fix)
         print("\n" + "-" * 50 + "\n")
         print(f"{GREEN}--= Запуск eval() Fixer =--{RESET}")
-        run_eval_fixer(args.path, args.fix)
+        run_eval_fixer(path, fix)
 
 if __name__ == "__main__":
     main()
