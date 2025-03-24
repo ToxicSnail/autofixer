@@ -1,0 +1,5 @@
+dist/
+build/
+develop-eggs/
+sql_injection_fixer.egg-info/
+__pycache__
