@@ -1,8 +1,0 @@
-#!/home/toxicsnail/Code/Python/autofixer/.venv/bin/python3
-# -*- coding: utf-8 -*-
-import re
-import sys
-from sql_injection_fixer_v2.test_sql_fixer import main
-if __name__ == '__main__':
-    sys.argv[0] = re.sub(r'(-script\.pyw|\.exe)?$', '', sys.argv[0])
-    sys.exit(main())
