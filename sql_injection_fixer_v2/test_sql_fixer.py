@@ -7,39 +7,12 @@ from libcst.metadata import MetadataWrapper, PositionProvider
 
 class SQLInjectionVisitor(ast.NodeVisitor):
     """
-    Ищем небезопасную конкатенацию строк для SQL-запросов.
-    Пример: query = "SELECT ... " + str(param)
+    Ищем небезопасную конкатенацию строк для SQL‑запросов
+    и f‑строки вида  f"... {param} ..."
     """
     def __init__(self, filename):
         self.filename = filename
         self.vulnerabilities = []
-
-    def visit_Assign(self, node):
-        """
-        Ищем присвоение вида: query = "SELECT ... " + str(param)
-        """
-        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            var_name = node.targets[0].id
-            if isinstance(node.value, ast.BinOp) and isinstance(node.value.op, ast.Add):
-
-                param_name = self._extract_param_name(node.value)
-                query_part = self._extract_query_part(node.value)
-
-                if param_name or query_part:
-                    is_simple = self._is_simple_concatenation(node.value)
-
-                    self.vulnerabilities.append({
-                        'file': self.filename,
-                        'lineno_assign': node.lineno,
-                        'var_name': var_name,
-                        'param_name': param_name,
-                        'lineno_execute': None,
-                        'query_part': query_part,
-                        'is_simple': is_simple
-                    })
-                    print(f"[DEBUG] Found vulnerability at line {node.lineno} in {self.filename}: query = {var_name} + {param_name} (simple: {is_simple})")
-
-        self.generic_visit(node)
 
     def _extract_param_name(self, binop_node):
         """
@@ -61,11 +34,75 @@ class SQLInjectionVisitor(ast.NodeVisitor):
                 return side.value
         return None
 
+    def _extract_from_fstring(self, joined: ast.JoinedStr):
+        """
+        Разбираем f‑строку, возвращаем (param_name, static_part).
+        Берём только **первую** подстановку вида {param}.
+        """
+        param_name = None
+        static_parts = []
+        for part in joined.values:
+            # Статическая строка
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                static_parts.append(part.value)
+            # Подстановка {param}
+            elif isinstance(part, ast.FormattedValue) and isinstance(part.value, ast.Name):
+                if param_name is None:  # берём только первое вхождение
+                    param_name = part.value.id
+        return param_name, ''.join(static_parts)
+
     def _is_simple_concatenation(self, binop_node):
         """
         Проверяем, является ли конкатенация "простой" (одна переменная).
         """
         return isinstance(binop_node.left, ast.Constant) and isinstance(binop_node.right, ast.Call)
+
+    def visit_Assign(self, node):
+        """
+        Ищем присвоение вида:
+            query = "SELECT ... " + str(param)
+            query = f"SELECT ... {param}"
+        """
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            var_name = node.targets[0].id
+
+            # --- вариант 1: конкатенация ---
+            if isinstance(node.value, ast.BinOp) and isinstance(node.value.op, ast.Add):
+                param_name = self._extract_param_name(node.value)
+                query_part = self._extract_query_part(node.value)
+
+                if param_name or query_part:
+                    is_simple = self._is_simple_concatenation(node.value)
+
+                    self.vulnerabilities.append({
+                        'file': self.filename,
+                        'lineno_assign': node.lineno,
+                        'var_name': var_name,
+                        'param_name': param_name,
+                        'lineno_execute': None,
+                        'query_part': query_part,
+                        'is_simple': is_simple
+                    })
+                    print(f"[DEBUG] Found vulnerability at line {node.lineno} in {self.filename}: "
+                          f"query = {var_name} + {param_name} (simple: {is_simple})")
+
+            # --- вариант 2: f‑строка ---
+            elif isinstance(node.value, ast.JoinedStr):
+                param_name, query_part = self._extract_from_fstring(node.value)
+                if param_name:
+                    self.vulnerabilities.append({
+                        'file': self.filename,
+                        'lineno_assign': node.lineno,
+                        'var_name': var_name,
+                        'param_name': param_name,
+                        'lineno_execute': None,
+                        'query_part': query_part,
+                        'is_simple': True          # для f‑строки считаем "простой"
+                    })
+                    print(f"[DEBUG] Found f‑string vulnerability at line {node.lineno} "
+                          f"in {self.filename}: query = {var_name} (param: {param_name})")
+
+        self.generic_visit(node)
 
     def visit_Call(self, node):
         """
@@ -151,7 +188,7 @@ class SQLInjectionFixer(cst.CSTTransformer):
 
 def analyze_sql_injections(path):
     """
-    Рекурсивно обходим каталоги, ищем .py-файлы,
+    Рекурсивно обходим каталоги, ищем .py‑файлы,
     запускаем SQLInjectionVisitor для сбора уязвимостей.
     """
     vulnerabilities = []
@@ -165,7 +202,6 @@ def analyze_sql_injections(path):
                     tree = ast.parse(code, filename=fullpath)
                     visitor = SQLInjectionVisitor(fullpath)
                     visitor.visit(tree)
-                    # Собираем найденные уязвимости
                     vulnerabilities.extend(visitor.vulnerabilities)
                 except SyntaxError as e:
                     print(f"[SYNTAX ERROR] {fullpath}: {e}")
@@ -205,7 +241,8 @@ def fix_sql_injections(vulnerabilities):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Autofix SQL-injections (simplified example).')
+    # print("asdasdsad")
+    parser = argparse.ArgumentParser(description='Autofix SQL-injections (конкатенация + f‑строки).')
     parser.add_argument('path', help='Path to the directory with Python files')
     parser.add_argument('--fix', action='store_true', help='Automatically fix vulnerabilities')
     args = parser.parse_args()
@@ -215,7 +252,8 @@ def main():
     if vulnerabilities:
         print("[!] SQL-injection vulnerabilities found:")
         for v in vulnerabilities:
-            print(f" - {v['file']} (line {v['lineno_assign']}): dangerous concatenation for a variable '{v['var_name']}' -> {v['param_name']}")
+            print(f" - {v['file']} (line {v['lineno_assign']}): dangerous concatenation "
+                  f"for variable '{v['var_name']}' -> {v['param_name']}")
             if v['lineno_execute']:
                 print(f"      Found cursor.execute(...) on line {v['lineno_execute']}")
 
