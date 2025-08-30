@@ -9,8 +9,5 @@ def vulnerable_query(user_id):
     
     query_f = f"SELECT * FROM users WHERE id = {user_id}"  # Еще один уязвимый вариант (f-строка)
     cursor.execute(query_f)
-  
-    query_format = "SELECT * FROM users WHERE id = {}".format(user_id)  # Еще один уязвимый вариант (.format())
-    cursor.execute(query_format)
-
+    
     return cursor.fetchall()
